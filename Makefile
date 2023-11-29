@@ -26,6 +26,8 @@ deps.darwin.amd64:
 
 	git clone -b v${DUCKDB_VERSION} --depth 1 https://github.com/duckdb/duckdb.git
 	cd duckdb && \
+	git fetch origin main && \
+	git cherry-pick -n -m 1 cafbcfb3c66634e6c5d7e9b8eb692791b93139d1 && \
 	CFLAGS="-target x86_64-apple-macos11 -O3" CXXFLAGS="-target x86_64-apple-macos11 -O3" BUILD_SHELL=0 BUILD_UNITTESTS=0 make -j 2 && \
 	mkdir -p lib && \
 	for f in `find . -name '*.o'`; do cp $$f lib; done && \
@@ -40,7 +42,9 @@ deps.darwin.arm64:
 
 	git clone -b v${DUCKDB_VERSION} --depth 1 https://github.com/duckdb/duckdb.git
 	cd duckdb && \
-	CFLAGS="-target arm64-apple-macos11 -O3" CXXFLAGS="-target arm64-apple-macos11 -O3" BUILD_SHELL=0 BUILD_UNITTESTS=0 make -j 2 && \
+	git fetch origin main && \
+	git cherry-pick -n -m 1 cafbcfb3c66634e6c5d7e9b8eb692791b93139d1 && \
+	CFLAGS="-target arm64-apple-macos11 -O3" CXXFLAGS="-target arm64-apple-macos11 -O3" BUILD_SHELL=0 BUILD_UNITTESTS=0" make -j 2 && \
 	mkdir -p lib && \
 	for f in `find . -name '*.o'`; do cp $$f lib; done && \
 	cd lib && \
@@ -54,6 +58,8 @@ deps.linux.amd64:
 
 	git clone -b v${DUCKDB_VERSION} --depth 1 https://github.com/duckdb/duckdb.git
 	cd duckdb && \
+	git fetch origin main && \
+	git cherry-pick -n -m 1 cafbcfb3c66634e6c5d7e9b8eb692791b93139d1 && \
 	CFLAGS="-O3" CXXFLAGS="-O3" make -j 2 && \
 	BUILD_SHELL=0 BUILD_UNITTESTS=0 make -j 2 && \
 	mkdir -p lib && \
@@ -69,6 +75,8 @@ deps.linux.arm64:
 
 	git clone -b v${DUCKDB_VERSION} --depth 1 https://github.com/duckdb/duckdb.git
 	cd duckdb && \
+	git fetch origin main && \
+	git cherry-pick -n -m 1 cafbcfb3c66634e6c5d7e9b8eb692791b93139d1 && \
 	CC="aarch64-linux-gnu-gcc" CXX="aarch64-linux-gnu-g++" CFLAGS="-O3" CXXFLAGS="-O3" BUILD_SHELL=0 BUILD_UNITTESTS=0 make -j 2 && \
 	mkdir -p lib && \
 	for f in `find . -name '*.o'`; do cp $$f lib; done && \
