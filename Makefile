@@ -44,7 +44,7 @@ deps.darwin.arm64:
 	cd duckdb && \
 	git fetch origin main && \
 	git cherry-pick -n -m 1 cafbcfb3c66634e6c5d7e9b8eb692791b93139d1 && \
-	CFLAGS="-target arm64-apple-macos11 -O3" CXXFLAGS="-target arm64-apple-macos11 -O3" BUILD_SHELL=0 BUILD_UNITTESTS=0" make -j 2 && \
+	CFLAGS="-target arm64-apple-macos11 -O3" CXXFLAGS="-target arm64-apple-macos11 -O3" BUILD_SHELL=0 BUILD_UNITTESTS=0 make -j 2 && \
 	mkdir -p lib && \
 	for f in `find . -name '*.o'`; do cp $$f lib; done && \
 	cd lib && \
