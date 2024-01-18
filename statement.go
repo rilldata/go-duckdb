@@ -203,30 +203,40 @@ func (s *stmt) execute(ctx context.Context, args []driver.NamedValue) (*C.duckdb
 	}
 	defer C.duckdb_destroy_pending(&pendingRes)
 
-	for {
+	done := make(chan struct{})
+	defer close(done)
+	queryComplete := false
+
+	go func() {
 		select {
 		// if context is cancelled or deadline exceeded, don't execute further
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			// continue
+			// sometimes this goroutine is not scheduled immediately and by that time if another query is scheduled on this connection
+			// this can cancel that query so need to handle cases when original query was complete.
+			if queryComplete {
+				return
+			}
+			// need to interrupt to cancel the query
+			C.duckdb_interrupt(*s.c.con)
+			return
+		case <-done:
+			return
 		}
-		state := C.duckdb_pending_execute_task(pendingRes)
-		if state == C.DUCKDB_PENDING_ERROR {
-			dbErr := C.GoString(C.duckdb_pending_error(pendingRes))
-			return nil, errors.New(dbErr)
-		}
-		if C.duckdb_pending_execution_is_finished(state) {
-			break
-		}
-	}
+	}()
 
 	var res C.duckdb_result
-	if state := C.duckdb_execute_pending(pendingRes, &res); state == C.DuckDBError {
+	state := C.duckdb_execute_pending(pendingRes, &res)
+	queryComplete = true
+	if state == C.DuckDBError {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		dbErr := C.GoString(C.duckdb_result_error(&res))
 		C.duckdb_destroy_result(&res)
 		return nil, errors.New(dbErr)
 	}
+
 	return &res, nil
 }
 
