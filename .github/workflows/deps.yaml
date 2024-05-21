@@ -24,7 +24,7 @@ jobs:
             retention-days: 1
   darwin_amd64:
     needs: prepare
-    runs-on: macos-latest
+    runs-on: macos-13 # To run on amd64 as a workaround for https://github.com/marcboeker/go-duckdb/issues/215
     steps:
       - uses: actions/checkout@v3
         with:
