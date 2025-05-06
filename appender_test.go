@@ -494,7 +494,7 @@ func TestAppenderUUID(t *testing.T) {
 	}
 }
 
-func newAppenderHugeIntTest[T numericType](val T, c *Connector, db *sql.DB, a *Appender) func(t *testing.T) {
+func newAppenderHugeIntTest[T numericType](val T, db *sql.DB, a *Appender) func(t *testing.T) {
 	return func(t *testing.T) {
 		typeName := reflect.TypeOf(val).String()
 		require.NoError(t, a.AppendRow(val, typeName))
@@ -514,16 +514,16 @@ func TestAppenderHugeInt(t *testing.T) {
 	defer cleanupAppender(t, c, db, conn, a)
 
 	tests := map[string]func(t *testing.T){
-		"int8":    newAppenderHugeIntTest[int8](1, c, db, a),
-		"int16":   newAppenderHugeIntTest[int16](2, c, db, a),
-		"int32":   newAppenderHugeIntTest[int32](3, c, db, a),
-		"int64":   newAppenderHugeIntTest[int64](4, c, db, a),
-		"uint8":   newAppenderHugeIntTest[uint8](5, c, db, a),
-		"uint16":  newAppenderHugeIntTest[uint16](6, c, db, a),
-		"uint32":  newAppenderHugeIntTest[uint32](7, c, db, a),
-		"uint64":  newAppenderHugeIntTest[uint64](8, c, db, a),
-		"float32": newAppenderHugeIntTest[float32](9, c, db, a),
-		"float64": newAppenderHugeIntTest[float64](10, c, db, a),
+		"int8":    newAppenderHugeIntTest[int8](1, db, a),
+		"int16":   newAppenderHugeIntTest[int16](2, db, a),
+		"int32":   newAppenderHugeIntTest[int32](3, db, a),
+		"int64":   newAppenderHugeIntTest[int64](4, db, a),
+		"uint8":   newAppenderHugeIntTest[uint8](5, db, a),
+		"uint16":  newAppenderHugeIntTest[uint16](6, db, a),
+		"uint32":  newAppenderHugeIntTest[uint32](7, db, a),
+		"uint64":  newAppenderHugeIntTest[uint64](8, db, a),
+		"float32": newAppenderHugeIntTest[float32](9, db, a),
+		"float64": newAppenderHugeIntTest[float64](10, db, a),
 	}
 	for name, test := range tests {
 		t.Run(name, test)
@@ -832,7 +832,7 @@ func TestAppenderWithJSON(t *testing.T) {
 		    c1 UBIGINT,
 			l1 TINYINT[],
 			s1 STRUCT(a INTEGER, b VARCHAR[]),
-		    l2 STRUCT(a STRUCT(a FLOAT[])[])[]              
+		    l2 STRUCT(a STRUCT(a FLOAT[])[])[]
 	  	)`)
 	defer cleanupAppender(t, c, db, conn, a)
 
@@ -867,6 +867,66 @@ func TestAppenderWithJSON(t *testing.T) {
 		i++
 	}
 	require.Equal(t, len(jsonInputs), i)
+}
+
+func TestAppenderUnion(t *testing.T) {
+	c, db, conn, a := prepareAppender(t, `
+    CREATE TABLE test (
+    	i INTEGER,
+        u UNION(num INTEGER, str VARCHAR)
+    )`)
+	defer cleanupAppender(t, c, db, conn, a)
+
+	testCases := []struct {
+		name     string
+		input    any
+		expected any
+	}{
+		{
+			name:     "integer union",
+			input:    Union{Tag: "num", Value: int32(42)},
+			expected: Union{Tag: "num", Value: int32(42)},
+		},
+		{
+			name:     "string union",
+			input:    Union{Tag: "str", Value: "hello union"},
+			expected: Union{Tag: "str", Value: "hello union"},
+		},
+		{
+			name:     "plain integer",
+			input:    42,
+			expected: Union{Tag: "num", Value: int32(42)},
+		},
+		{
+			name:     "plain string",
+			input:    "plain",
+			expected: Union{Tag: "str", Value: "plain"},
+		},
+		{
+			name:     "nil value",
+			input:    nil,
+			expected: nil,
+		},
+	}
+
+	for i, tc := range testCases {
+		require.NoError(t, a.AppendRow(i, tc.input))
+	}
+	require.NoError(t, a.Flush())
+
+	// Verify results.
+	res, err := db.QueryContext(context.Background(), `SELECT u FROM test ORDER BY i`)
+	require.NoError(t, err)
+	defer closeRowsWrapper(t, res)
+
+	i := 0
+	for res.Next() {
+		var v any
+		require.NoError(t, res.Scan(&v))
+		require.Equal(t, testCases[i].expected, v, "case: %s", testCases[i].name)
+		i++
+	}
+	require.Equal(t, len(testCases), i)
 }
 
 func BenchmarkAppenderNested(b *testing.B) {
