@@ -198,7 +198,7 @@ type Union struct {
 
 func castToTime(val any) (time.Time, error) {
 	var ti time.Time
-	switch v := any(val).(type) {
+	switch v := val.(type) {
 	case time.Time:
 		ti = v
 	default:
@@ -235,8 +235,8 @@ func getTSTicks(t Type, val any) (int64, error) {
 	return ti.UnixNano(), nil
 }
 
-func getMappedTimestamp(val any) (*mapping.Timestamp, error) {
-	ticks, err := getTSTicks(TYPE_TIMESTAMP, val)
+func getMappedTimestamp(t Type, val any) (*mapping.Timestamp, error) {
+	ticks, err := getTSTicks(t, val)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +266,7 @@ func getMappedTimestampNS(val any) (*mapping.TimestampNS, error) {
 	}
 	return mapping.NewTimestampNS(ticks), nil
 }
+
 func getMappedDate[T any](val T) (*mapping.Date, error) {
 	ti, err := castToTime(val)
 	if err != nil {

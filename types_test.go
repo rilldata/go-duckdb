@@ -799,23 +799,69 @@ func TestTimestampTZ(t *testing.T) {
 	db := openDbWrapper(t, ``)
 	defer closeDbWrapper(t, db)
 
-	_, err := db.Exec("CREATE TABLE IF NOT EXISTS tbl (tz TIMESTAMPTZ)")
-	require.NoError(t, err)
-
-	IST, err := time.LoadLocation("Asia/Kolkata")
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS tbl (tz TIMESTAMPTZ)`)
 	require.NoError(t, err)
 
 	const longForm = "2006-01-02 15:04:05 MST"
-	ts, err := time.ParseInLocation(longForm, "2016-01-17 20:04:05 IST", IST)
+
+	// Test a location east of GMT.
+	loc, err := time.LoadLocation("Asia/Kolkata")
 	require.NoError(t, err)
 
-	_, err = db.Exec("INSERT INTO tbl (tz) VALUES(?)", ts)
+	ts, err := time.ParseInLocation(longForm, "2016-01-17 20:04:05 IST", loc)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO tbl (tz) VALUES(?)`, ts)
 	require.NoError(t, err)
 
 	var tz time.Time
-	err = db.QueryRow("SELECT tz FROM tbl").Scan(&tz)
+	err = db.QueryRow(`SELECT tz FROM tbl`).Scan(&tz)
 	require.NoError(t, err)
-	require.Equal(t, ts.UTC(), tz)
+	require.Equal(t, ts.UTC(), tz.UTC())
+
+	// Reset and test a location west of GMT.
+	_, err = db.Exec(`DELETE FROM tbl`)
+	require.NoError(t, err)
+
+	loc, err = time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+
+	ts, err = time.ParseInLocation(longForm, "2016-01-17 10:04:05 PDT", loc)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO tbl (tz) VALUES(?)`, ts)
+	require.NoError(t, err)
+
+	err = db.QueryRow(`SELECT tz FROM tbl`).Scan(&tz)
+	require.NoError(t, err)
+	require.Equal(t, ts.UTC(), tz.UTC())
+
+	// Test other time zone.
+	ti := time.Now().UTC().Truncate(time.Microsecond)
+
+	_, err = db.Exec(`SET TimeZone = 'Etc/UTC'`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE ts_tbl (t TIMESTAMPTZ)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO ts_tbl VALUES (?)`, ti)
+	require.NoError(t, err)
+
+	var newTime time.Time
+	require.NoError(t, db.QueryRow(`SELECT t FROM ts_tbl`).Scan(&newTime))
+	require.Equal(t, ti, newTime)
+
+	// Test disabling TIMESTAMP_TZ casts.
+
+	_, err = db.Exec(`SET disable_timestamptz_casts = true`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE times (t TIMESTAMPTZ)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`INSERT INTO times VALUES (?)`, ti)
+	require.NoError(t, err)
 }
 
 func TestBoolean(t *testing.T) {

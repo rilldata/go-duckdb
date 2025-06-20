@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/marcboeker/go-duckdb/mapping"
 )
@@ -169,20 +168,26 @@ func (s *Stmt) bindHugeint(val *big.Int, n int) (mapping.State, error) {
 func (s *Stmt) bindTimestamp(val driver.NamedValue, t Type, n int) (mapping.State, error) {
 	var state mapping.State
 	switch t {
-	case TYPE_TIMESTAMP, TYPE_TIMESTAMP_TZ:
-		v, err := getMappedTimestamp(val.Value)
+	case TYPE_TIMESTAMP:
+		v, err := getMappedTimestamp(t, val.Value)
 		if err != nil {
 			return mapping.StateError, err
 		}
 		state = mapping.BindTimestamp(*s.preparedStmt, mapping.IdxT(n+1), *v)
+	case TYPE_TIMESTAMP_TZ:
+		v, err := getMappedTimestamp(t, val.Value)
+		if err != nil {
+			return mapping.StateError, err
+		}
+		state = mapping.BindTimestampTZ(*s.preparedStmt, mapping.IdxT(n+1), *v)
 	case TYPE_TIMESTAMP_S:
 		v, err := getMappedTimestampS(val.Value)
 		if err != nil {
 			return mapping.StateError, err
 		}
-		tMS := mapping.CreateTimestampS(*v)
-		state = mapping.BindValue(*s.preparedStmt, mapping.IdxT(n+1), tMS)
-		mapping.DestroyValue(&tMS)
+		tS := mapping.CreateTimestampS(*v)
+		state = mapping.BindValue(*s.preparedStmt, mapping.IdxT(n+1), tS)
+		mapping.DestroyValue(&tS)
 	case TYPE_TIMESTAMP_MS:
 		v, err := getMappedTimestampMS(val.Value)
 		if err != nil {
@@ -232,6 +237,23 @@ func (s *Stmt) bindTime(val driver.NamedValue, t Type, n int) (mapping.State, er
 	return state, nil
 }
 
+func (s *Stmt) bindJSON(val driver.NamedValue, n int) (mapping.State, error) {
+	switch v := val.Value.(type) {
+	case []byte:
+		return mapping.BindVarchar(*s.preparedStmt, mapping.IdxT(n+1), string(v)), nil
+	case string:
+		return mapping.BindVarchar(*s.preparedStmt, mapping.IdxT(n+1), v), nil
+	}
+	return mapping.StateError, addIndexToError(unsupportedTypeError("JSON interface, need []byte or string"), n+1)
+}
+
+func (s *Stmt) bindUUID(val driver.NamedValue, n int) (mapping.State, error) {
+	if ss, ok := val.Value.(fmt.Stringer); ok {
+		return mapping.BindVarchar(*s.preparedStmt, mapping.IdxT(n+1), ss.String()), nil
+	}
+	return mapping.StateError, addIndexToError(unsupportedTypeError(unknownTypeErrMsg), n+1)
+}
+
 // Used for binding Array, List, Struct. In the future, also Map and Union
 func (s *Stmt) bindCompositeValue(val driver.NamedValue, n int) (mapping.State, error) {
 	lt, err := s.paramLogicalType(n + 1)
@@ -241,26 +263,53 @@ func (s *Stmt) bindCompositeValue(val driver.NamedValue, n int) (mapping.State, 
 	}
 
 	mappedVal, err := createValue(lt, val.Value)
-	defer mapping.DestroyValue(mappedVal)
+	defer mapping.DestroyValue(&mappedVal)
 	if err != nil {
 		return mapping.StateError, addIndexToError(err, n+1)
 	}
 
-	state := mapping.BindValue(*s.preparedStmt, mapping.IdxT(n+1), *mappedVal)
+	state := mapping.BindValue(*s.preparedStmt, mapping.IdxT(n+1), mappedVal)
 	return state, nil
 }
 
-func (s *Stmt) tryBindComplexValue(val driver.NamedValue, t Type, n int) (mapping.State, error) {
-	switch val.Value.(type) {
-	case time.Time:
-		// Fallback to TIMESTAMP, if we cannot know the exact type.
-		return s.bindTimestamp(val, TYPE_TIMESTAMP, n)
+func (s *Stmt) tryBindComplexValue(val driver.NamedValue, n int) (mapping.State, error) {
+	lt, mappedVal, err := createValueByReflection(val.Value)
+	defer mapping.DestroyLogicalType(&lt)
+	defer mapping.DestroyValue(&mappedVal)
+	if err != nil {
+		return mapping.StateError, addIndexToError(err, n+1)
 	}
-	name := typeToStringMap[t]
-	return mapping.StateError, addIndexToError(unsupportedTypeError(name), n+1)
+	state := mapping.BindValue(*s.preparedStmt, mapping.IdxT(n+1), mappedVal)
+	return state, nil
 }
 
-func (s *Stmt) bindComplexValue(val driver.NamedValue, n int) (mapping.State, error) {
+func (s *Stmt) bindComplexValue(val driver.NamedValue, n int, t Type, name string) (mapping.State, error) {
+	// We could not resolve this parameter when binding the query.
+	// Fall back to the Go type.
+	if t == TYPE_INVALID {
+		return s.tryBindComplexValue(val, n)
+	}
+
+	switch t {
+	case TYPE_UUID:
+		return s.bindUUID(val, n)
+	case TYPE_TIMESTAMP, TYPE_TIMESTAMP_TZ, TYPE_TIMESTAMP_S, TYPE_TIMESTAMP_MS, TYPE_TIMESTAMP_NS:
+		return s.bindTimestamp(val, t, n)
+	case TYPE_DATE:
+		return s.bindDate(val, n)
+	case TYPE_TIME, TYPE_TIME_TZ:
+		return s.bindTime(val, t, n)
+	case TYPE_ARRAY, TYPE_LIST, TYPE_STRUCT:
+		return s.bindCompositeValue(val, n)
+	case TYPE_MAP, TYPE_ENUM, TYPE_UNION:
+		// FIXME: for other types: duckdb_param_logical_type once available, then create duckdb_value + duckdb_bind_value
+		// FIXME: for other types: use NamedValueChecker to support.
+		return mapping.StateError, addIndexToError(unsupportedTypeError(name), n+1)
+	}
+	return mapping.StateError, addIndexToError(unsupportedTypeError(unknownTypeErrMsg), n+1)
+}
+
+func (s *Stmt) bindValue(val driver.NamedValue, n int) (mapping.State, error) {
 	// For some queries, we cannot resolve the parameter type when preparing the query.
 	// E.g., for "SELECT * FROM (VALUES (?, ?)) t(a, b)", we cannot know the parameter types from the SQL statement alone.
 	// For these cases, ParamType returns TYPE_INVALID.
@@ -274,31 +323,18 @@ func (s *Stmt) bindComplexValue(val driver.NamedValue, n int) (mapping.State, er
 		return mapping.StateError, addIndexToError(unsupportedTypeError(name), n+1)
 	}
 
-	// We could not resolve this parameter when binding the query.
-	// Fall back to the Go type.
-	if t == TYPE_INVALID {
-		return s.tryBindComplexValue(val, t, n)
+	if t != TYPE_INVALID {
+		lt, e := s.paramLogicalType(n + 1)
+		if e != nil {
+			return mapping.StateError, e
+		}
+		alias := mapping.LogicalTypeGetAlias(lt)
+		switch alias {
+		case aliasJSON:
+			return s.bindJSON(val, n)
+		}
 	}
 
-	switch t {
-	case TYPE_TIMESTAMP, TYPE_TIMESTAMP_TZ, TYPE_TIMESTAMP_S, TYPE_TIMESTAMP_MS, TYPE_TIMESTAMP_NS:
-		return s.bindTimestamp(val, t, n)
-	case TYPE_DATE:
-		return s.bindDate(val, n)
-	case TYPE_TIME, TYPE_TIME_TZ:
-		return s.bindTime(val, t, n)
-	case TYPE_ARRAY, TYPE_LIST, TYPE_STRUCT:
-		return s.bindCompositeValue(val, n)
-	case TYPE_MAP, TYPE_ENUM, TYPE_UNION:
-		// FIXME: for other types: duckdb_param_logical_type once available, then create duckdb_value + duckdb_bind_value
-		// FIXME: for other types: use NamedValueChecker to support.
-		name = typeToStringMap[t]
-		return mapping.StateError, addIndexToError(unsupportedTypeError(name), n+1)
-	}
-	return mapping.StateError, addIndexToError(unsupportedTypeError(unknownTypeErrMsg), n+1)
-}
-
-func (s *Stmt) bindValue(val driver.NamedValue, n int) (mapping.State, error) {
 	switch v := val.Value.(type) {
 	case bool:
 		return mapping.BindBoolean(*s.preparedStmt, mapping.IdxT(n+1), v), nil
@@ -340,7 +376,7 @@ func (s *Stmt) bindValue(val driver.NamedValue, n int) (mapping.State, error) {
 	case nil:
 		return mapping.BindNull(*s.preparedStmt, mapping.IdxT(n+1)), nil
 	}
-	return s.bindComplexValue(val, n)
+	return s.bindComplexValue(val, n, t, name)
 }
 
 func (s *Stmt) bind(args []driver.NamedValue) error {
@@ -487,25 +523,35 @@ func (s *Stmt) executeBound(ctx context.Context) (*mapping.Result, error) {
 
 	mainDoneCh := make(chan struct{})
 	bgDoneCh := make(chan struct{})
+
+	// go-routine waiting to receive on the context or main channel.
 	go func() {
 		select {
+		// Await an interrupt on the context.
 		case <-ctx.Done():
 			mapping.Interrupt(s.conn.conn)
-			close(bgDoneCh)
-			return
+			break
+		// Await a done-signal on the main channel.
+		// Reading from a closed channel succeeds immediately.
 		case <-mainDoneCh:
-			close(bgDoneCh)
-			return
+			break
 		}
+		close(bgDoneCh)
 	}()
 
 	var res mapping.Result
 	state := mapping.ExecutePending(pendingRes, &res)
+
+	// We finished executing the pending query.
+	// Close the main channel.
 	close(mainDoneCh)
-	// also wait for background goroutine to finish
-	// sometimes the bg goroutine is not scheduled immediately and by that time if another query is running on this connection
-	// it can cancel that query so need to wait for it to finish as well
+
+	// Wait for the background go-routine to finish, too.
+	// Sometimes the go-routine is not scheduled immediately.
+	// By the time it is scheduled, another query might be running on this connection.
+	// If we don't wait for the go-routine to finish, it can cancel that new query.
 	<-bgDoneCh
+
 	if state == mapping.StateError {
 		if ctx.Err() != nil {
 			mapping.DestroyResult(&res)
@@ -516,6 +562,7 @@ func (s *Stmt) executeBound(ctx context.Context) (*mapping.Result, error) {
 		mapping.DestroyResult(&res)
 		return nil, err
 	}
+
 	return &res, nil
 }
 
